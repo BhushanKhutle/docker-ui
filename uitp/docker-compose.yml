@@ -1,0 +1,96 @@
+version: "3.9"
+
+# ============================================================
+# UITP — Universal Image Transfer Portal
+# ============================================================
+#
+# Quick start:
+#   cp .env.example .env        # edit secrets
+#   docker compose up -d --build
+#
+# Services:
+#   postgres        → internal only
+#   uitp-backend    → :4000
+#   uitp-frontend   → :3000
+# ============================================================
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: uitp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-uitp}
+      POSTGRES_USER:     ${DB_USER:-uitp}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-uitp_secret_change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-uitp} -d ${DB_NAME:-uitp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - uitp-net
+
+  # ── Backend ────────────────────────────────────────────────
+  uitp-backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: uitp-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST:        postgres
+      DB_PORT:        ${DB_PORT:-5432}
+      DB_NAME:        ${DB_NAME:-uitp}
+      DB_USER:        ${DB_USER:-uitp}
+      DB_PASSWORD:    ${DB_PASSWORD:-uitp_secret_change_me}
+      JWT_SECRET:     ${JWT_SECRET:-change_me_to_a_long_random_string_at_least_64_characters_long}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change_me_32_byte_hex_key_here_00000000000000000000000000000000}
+      PORT:           ${PORT:-4000}
+      NODE_ENV:       ${NODE_ENV:-production}
+      CORS_ORIGIN:    ${CORS_ORIGIN:-http://localhost:3000}
+    ports:
+      - "4000:4000"
+    networks:
+      - uitp-net
+    # Mount SSH known_hosts so transfers don't fail on host-key prompts
+    volumes:
+      - ssh_known_hosts:/root/.ssh
+
+  # ── Frontend ───────────────────────────────────────────────
+  uitp-frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
+    container_name: uitp-frontend
+    restart: unless-stopped
+    depends_on:
+      - uitp-backend
+    ports:
+      - "3000:80"
+    networks:
+      - uitp-net
+
+# ── Volumes ────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    name: uitp-postgres-data
+  ssh_known_hosts:
+    name: uitp-ssh-known-hosts
+
+# ── Networks ───────────────────────────────────────────────────
+networks:
+  uitp-net:
+    name: uitp-network
+    driver: bridge
